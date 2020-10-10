@@ -1,7 +1,7 @@
 use std::{fmt::Write, fs::DirEntry, io, path::Path, path::PathBuf};
 
 use actix_web::{dev::ServiceResponse, HttpRequest, HttpResponse};
-use percent_encoding::{utf8_percent_encode, CONTROLS};
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use v_htmlescape::escape as escape_html_entity;
 
 /// A directory; responds with the generated directory listing.
@@ -40,15 +40,15 @@ impl Directory {
 pub(crate) type DirectoryRenderer =
     dyn Fn(&Directory, &HttpRequest) -> Result<ServiceResponse, io::Error>;
 
-// show file url as relative to static path
-macro_rules! encode_file_url {
-    ($path:ident) => {
-        utf8_percent_encode(&$path, CONTROLS)
-    };
-}
+// show file url as relative to static path TODO what did this mean?
+//macro_rules! url_encode_filename {
+//    ($name:ident) => {
+//        utf8_percent_encode(&$name, NON_ALPHANUMERIC)
+//    };
+//}
 
 // " -- &quot;  & -- &amp;  ' -- &#x27;  < -- &lt;  > -- &gt;  / -- &#x2f;
-macro_rules! encode_file_name {
+macro_rules! html_encode_file_name {
     ($entry:ident) => {
         escape_html_entity(&$entry.file_name().to_string_lossy())
     };
@@ -65,13 +65,21 @@ pub(crate) fn directory_listing(
     for entry in dir.path.read_dir()? {
         if dir.is_visible(&entry) {
             let entry = entry.unwrap();
-            let p = match entry.path().strip_prefix(&dir.path) {
-                Ok(p) if cfg!(windows) => {
-                    base.join(p).to_string_lossy().replace("\\", "/")
-                }
-                Ok(p) => base.join(p).to_string_lossy().into_owned(),
+            let path = match entry.path().strip_prefix(&dir.path) {
+                // TODO handle windows
+                //Ok(p) if cfg!(windows) => {
+                //    base.join(p).to_string_lossy().replace("\\", "/")
+                //}
+                Ok(p) => base.join(p),
                 Err(_) => continue,
-            };
+            }.iter()
+            .skip(1) // Root
+            .map(|component| utf8_percent_encode(&component.to_string_lossy(), NON_ALPHANUMERIC).to_string())
+            .fold(String::new(), |mut acc, component| {
+                acc.push('/');
+                acc.push_str(&component);
+                acc
+            });
 
             // if file is a directory, add '/' to the end of the name
             if let Ok(metadata) = entry.metadata() {
@@ -79,15 +87,15 @@ pub(crate) fn directory_listing(
                     let _ = write!(
                         body,
                         "<li><a href=\"{}\">{}/</a></li>",
-                        encode_file_url!(p),
-                        encode_file_name!(entry),
+                        path,
+                        html_encode_file_name!(entry),
                     );
                 } else {
                     let _ = write!(
                         body,
                         "<li><a href=\"{}\">{}</a></li>",
-                        encode_file_url!(p),
-                        encode_file_name!(entry),
+                        path,
+                        html_encode_file_name!(entry),
                     );
                 }
             } else {
